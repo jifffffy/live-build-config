@@ -35,7 +35,7 @@ jobs:
      
           # Set an output parameter `uname` for use in subsequent steps
           run: |
-            ./build.sh --live --variant
+            ./build.sh --live
             ls -al
             cp images/* "/artifacts/"
 
