@@ -16,17 +16,19 @@ SUDO="sudo"
 VERBOSE=""
 DEBUG=""
 HOST_ARCH=$(dpkg --print-architecture)
+MIRROR=${MIRROR:-/srv/mirror/kali}
 
 image_name() {
 	case "$IMAGE_TYPE" in
 		live)
-			live_image_name
+			live_image_name "$@"
 		;;
 		installer)
-			installer_image_name
+			installer_image_name "$@"
 		;;
 	esac
 }
+
 
 live_image_name() {
 	case "$KALI_ARCH" in
@@ -47,6 +49,10 @@ installer_image_name() {
 	fi
 }
 
+installer_image_name() {
+	echo "debian-cd/out/kali-$KALI_VERSION-ARCH-1.iso"
+}
+
 target_image_name() {
 	local arch=$1
 
@@ -57,15 +63,17 @@ target_image_name() {
 	fi
 	if [ "$IMAGE_TYPE" = "live" ]; then
 		if [ "$KALI_VARIANT" = "default" ]; then
-			echo "${TARGET_SUBDIR:+$TARGET_SUBDIR/}kali-linux-$KALI_VERSION-live-$KALI_ARCH.$IMAGE_EXT"
+			echo "${TARGET_SUBDIR:+$TARGET_SUBDIR/}kali-linux-$KALI_VERSION-$KALI_ARCH.$IMAGE_EXT"
 		else
-			echo "${TARGET_SUBDIR:+$TARGET_SUBDIR/}kali-linux-$KALI_VERSION-live-$KALI_VARIANT-$KALI_ARCH.$IMAGE_EXT"
+			echo "${TARGET_SUBDIR:+$TARGET_SUBDIR/}kali-linux-$KALI_VERSION-$KALI_VARIANT-$KALI_ARCH.$IMAGE_EXT"
 		fi
 	else
 		if [ "$KALI_VARIANT" = "default" ]; then
-			echo "${TARGET_SUBDIR:+$TARGET_SUBDIR/}kali-linux-$KALI_VERSION-installer-$KALI_ARCH.$IMAGE_EXT"
+			echo
+			"${TARGET_SUBDIR:+$TARGET_SUBDIR/}kali-linux-$KALI_VERSION-installer-$KALI_ARCH.$IMAGE_EXT"
 		else
-			echo "${TARGET_SUBDIR:+$TARGET_SUBDIR/}kali-linux-$KALI_VERSION-installer-$KALI_VARIANT-$KALI_ARCH.$IMAGE_EXT"
+			echo
+			"${TARGET_SUBDIR:+$TARGET_SUBDIR/}kali-linux-$KALI_VERSION-installer-$KALI_VARIANT-$KALI_ARCH.$IMAGE_EXT"
 		fi
 	fi
 }
@@ -88,7 +96,6 @@ default_version() {
 
 failure() {
 	echo "Build of $KALI_DIST/$KALI_VARIANT/$KALI_ARCH $IMAGE_TYPE image failed (see build.log for details)" >&2
-	echo "Log: $BUILD_LOG" >&2
 	exit 2
 }
 
@@ -139,13 +146,10 @@ print_help() {
 # Allowed command line options
 . $(dirname $0)/.getopt.sh
 
-BUILD_LOG="$(pwd)/build.log"
-debug "BUILD_LOG: $BUILD_LOG"
-# Create empty file
-: > "$BUILD_LOG"
 
-# Parsing command line options (see .getopt.sh)
-temp=$(getopt -o "$BUILD_OPTS_SHORT" -l "$BUILD_OPTS_LONG,get-image-path" -- "$@")
+# Parsing command line options
+temp=$(getopt -o "$BUILD_OPTS_SHORT" -l "$BUILD_OPTS_LONG,get-image-path,installer" -- "$@")
+
 eval set -- "$temp"
 while true; do
 	case "$1" in
@@ -155,9 +159,7 @@ while true; do
 		-v|--verbose) VERBOSE="1"; shift 1; ;;
 		-D|--debug) DEBUG="1"; shift 1; ;;
 		-s|--salt) shift; ;;
-		-h|--help) print_help; ;;
 		--installer) IMAGE_TYPE="installer"; shift 1 ;;
-		--live) IMAGE_TYPE="live"; shift 1 ;;
 		--variant) KALI_VARIANT="$2"; shift 2; ;;
 		--version) KALI_VERSION="$2"; shift 2; ;;
 		--subdir) TARGET_SUBDIR="$2"; shift 2; ;;
@@ -198,7 +200,9 @@ fi
 
 # Build parameters for lb config
 KALI_CONFIG_OPTS="--distribution $KALI_DIST -- --variant $KALI_VARIANT"
-CODENAME=$KALI_DIST # for simple-cdd/debian-cd
+
+CODENAME=$KALI_DIST  # for debian-cd
+
 if [ -n "$OPT_pu" ]; then
 	KALI_CONFIG_OPTS="$KALI_CONFIG_OPTS --proposed-updates"
 	KALI_DIST="$KALI_DIST+pu"
@@ -211,57 +215,39 @@ debug "KALI_DIST: $KALI_DIST"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 debug "PATH: $PATH"
 
-if grep -q -e "^ID=debian" -e "^ID_LIKE=debian" /usr/lib/os-release; then
-	debug "OS: $( . /usr/lib/os-release && echo $NAME $VERSION )"
-elif [ -e /etc/debian_version ]; then
-	debug "OS: $( cat /etc/debian_version )"
-else
-	echo "ERROR: Non Debian-based OS" >&2
-fi
+# Either we use a git checkout of live-build
+# export LIVE_BUILD=/srv/cdimage.kali.org/live/live-build
 
-debug "IMAGE_TYPE: $IMAGE_TYPE"
 case "$IMAGE_TYPE" in
 	live)
-		if [ ! -d "$(dirname $0)/kali-config/variant-$KALI_VARIANT" ]; then
-			echo "ERROR: Unknown variant of Kali live configuration: $KALI_VARIANT" >&2
-		fi
-
+		# Or we ensure we have proper version installed
 		ver_live_build=$(dpkg-query -f '${Version}' -W live-build)
-		if dpkg --compare-versions "$ver_live_build" lt "1:20230131+kali5"; then
-			echo "ERROR: You need live-build (>= 1:20230131+kali5), you have $ver_live_build" >&2
+		if dpkg --compare-versions "$ver_live_build" lt 1:20151215kali1; then
+			echo "ERROR: You need live-build (>= 1:20151215kali1), you have $ver_live_build" >&2
 			exit 1
 		fi
-		debug "ver_live_build: $ver_live_build"
 
+		# Check we have a good debootstrap
 		ver_debootstrap=$(dpkg-query -f '${Version}' -W debootstrap)
 		if dpkg --compare-versions "$ver_debootstrap" lt "1.0.97"; then
-			echo "ERROR: You need debootstrap (>= 1.0.97), you have $ver_debootstrap" >&2
-			exit 1
+			if ! echo "$ver_debootstrap" | grep -q kali; then
+				echo "ERROR: You need debootstrap >= 1.0.97 (or a Kali patched debootstrap). Your current version: $ver_debootstrap" >&2
+				exit 1
+			fi
 		fi
-		debug "ver_debootstrap: $ver_debootstrap"
 	;;
 	installer)
-		if [ ! -d "$(dirname $0)/kali-config/installer-$KALI_VARIANT" ]; then
-			echo "ERROR: Unknown variant of Kali installer configuration: $KALI_VARIANT" >&2
-		fi
-
 		ver_debian_cd=$(dpkg-query -f '${Version}' -W debian-cd)
-		if dpkg --compare-versions "$ver_debian_cd" lt 3.1.28~kali1; then
-			echo "ERROR: You need debian-cd (>= 3.1.28~kali1), you have $ver_debian_cd" >&2
+		if dpkg --compare-versions "$ver_live_build" lt 3.1.27; then
+			echo "ERROR: You need live-build (>= 3.1.27), you have $ver_live_build" >&2
 			exit 1
 		fi
-		debug "ver_debian_cd: $ver_debian_cd"
 
-		ver_simple_cdd=$(dpkg-query -f '${Version}' -W simple-cdd)
-		if dpkg --compare-versions "$ver_simple_cdd" lt 0.6.8~kali2; then
-			echo "ERROR: You need simple-cdd (>= 0.6.8~kali2), you have $ver_simple_cdd" >&2
+		if [ ! -d $MIRROR ]; then
+			echo "ERROR: You need to have a local Kali mirror and indicate its location in the MIRROR environment variable." >&2
 			exit 1
 		fi
-		debug "ver_simple_cdd: $ver_simple_cdd"
-	;;
-	*)
-		echo "ERROR: Unsupported IMAGE_TYPE selected ($IMAGE_TYPE)" >&2
-		exit 1
+
 	;;
 esac
 
@@ -298,111 +284,62 @@ mkdir -p $TARGET_DIR/$TARGET_SUBDIR
 # Don't quit on any errors now
 set +e
 
+: > build.log
+
 case "$IMAGE_TYPE" in
 	live)
-		debug "Stage 1/2 - Config"
+		run_and_log $SUDO lb clean --purge
+		[ $? -eq 0 ] || failure
 		run_and_log lb config -a $KALI_ARCH $KALI_CONFIG_OPTS "$@"
 		[ $? -eq 0 ] || failure
 
-		debug "Stage 2/2 - Build"
 		run_and_log $SUDO lb build
 		if [ $? -ne 0 ] || [ ! -e $IMAGE_NAME ]; then
 			failure
 		fi
 	;;
 	installer)
-		# Override some debian-cd environment variables
-		export BASEDIR="$(pwd)/simple-cdd/debian-cd"
+
+		# Configure debian-cd with the runtime parameters
+		export CF=$(pwd)/CONF.sh
+		. $CF
+		export DEBIAN_CD_CONF_SOURCED=true
 		export ARCHES=$KALI_ARCH
-		export ARCH=$KALI_ARCH
 		export DEBVERSION=$KALI_VERSION
-		debug "BASEDIR: $BASEDIR"
-		debug "ARCHES: $ARCHES"
-		debug "ARCH: $ARCH"
-		debug "DEBVERSION: $DEBVERSION"
-
+		export CODENAME  # set earlier
 		if [ "$KALI_VARIANT" = "netinst" ]; then
-			export DISKTYPE="NETINST"
-			profiles="kali"
-			auto_profiles="kali"
-		elif [ "$KALI_VARIANT" = "purple" ]; then
-			export DISKTYPE="BD"
-			profiles="kali kali-purple offline"
-			auto_profiles="kali kali-purple offline"
-			export KERNEL_PARAMS="debian-installer/theme=Clearlooks-Purple"
-		else    # plain installer
-			export DISKTYPE="BD"
-			profiles="kali offline"
-			auto_profiles="kali offline"
-		fi
-		debug "DISKTYPE: $DISKTYPE"
-		debug "profiles: $profiles"
-		debug "auto_profiles: $auto_profiles"
-		[ -v KERNEL_PARAMS ] && debug "KERNEL_PARAMS: $KERNEL_PARAMS"
-
-		if [ -e .mirror ]; then
-			kali_mirror=$(cat .mirror)
+		    export DISKTYPE="netinst"
 		else
-			kali_mirror=http://archive.kali.org/kali/
-		fi
-		if ! echo "$kali_mirror" | grep -q '/$'; then
-			kali_mirror="$kali_mirror/"
-		fi
-		debug "kali_mirror: $kali_mirror"
-
-		debug "Stage 1/2 - File(s)"
-		# Setup custom debian-cd to make our changes
-		cp -aT /usr/share/debian-cd simple-cdd/debian-cd
-		[ $? -eq 0 ] || failure
-
-		# Use the same grub theme as in the live images
-		# Until debian-cd is smart enough: http://bugs.debian.org/1003927
-		cp -f kali-config/common/bootloaders/grub-pc/grub-theme.in simple-cdd/debian-cd/data/$CODENAME/grub-theme.in
-
-		# Keep 686-pae udebs as we changed the default from 686
-		# to 686-pae in the debian-installer images
-		sed -i -e '/686-pae/d' \
-			simple-cdd/debian-cd/data/$CODENAME/exclude-udebs-i386
-		[ $? -eq 0 ] || failure
-
-		# Configure the kali profile with the packages we want
-		grep -v '^#' kali-config/installer-$KALI_VARIANT/packages \
-			> simple-cdd/profiles/kali.downloads
-		[ $? -eq 0 ] || failure
-
-		# Tasksel is required in the mirror for debian-cd
-		echo tasksel >> simple-cdd/profiles/kali.downloads
-		[ $? -eq 0 ] || failure
-
-		# Grub is the only supported bootloader on arm64
-		# so ensure it's on the iso for arm64.
-		if [ "$KALI_ARCH" = "arm64" ]; then
-			debug "arm64 GRUB"
-			echo "grub-efi-arm64" >> simple-cdd/profiles/kali.downloads
-			[ $? -eq 0 ] || failure
+		    export DISKTYPE="DVD"
 		fi
 
-		# Run simple-cdd
-		debug "Stage 2/2 - Build"
-		cd simple-cdd/
-		run_and_log build-simple-cdd \
-			--verbose \
-			--debug \
-			--force-root \
-			--conf simple-cdd.conf \
-			--dist $CODENAME \
-			--debian-mirror $kali_mirror \
-			--profiles "$profiles" \
-			--auto-profiles "$auto_profiles"
-		res=$?
-		cd ../
-		if [ $res -ne 0 ] || [ ! -e $IMAGE_NAME ]; then
+		# Setup the required paths
+		mkdir -p debian-cd/tmp/apt debian-cd/out debian-cd/basedir
+		cp -a /usr/share/debian-cd/* debian-cd/basedir/
+		export MIRROR  # set by the user
+		export BASEDIR=$(pwd)/debian-cd/basedir
+		export TDIR=$(pwd)/debian-cd/tmp
+		export APTTMP=$TDIR/apt
+		export OUT=$(pwd)/debian-cd/out
+
+		# Configure the task with the packages we want
+		mkdir -p $BASEDIR/tasks/$CODENAME
+		(
+		 echo "#include <debian-installer+kernel>";
+		 grep -v '^#' kali-config/variant-$KALI_VARIANT/package-lists/kali.list.chroot
+		) >$BASEDIR/tasks/$CODENAME/kali
+		export TASK=kali
+
+		run_and_log $BASEDIR/build.sh $KALI_ARCH
+		if [ $? -ne 0 ] || [ ! -e $IMAGE_NAME ]; then
+
 			failure
 		fi
 	;;
 esac
 
-# If a command fails, make the whole script exit
+
+
 set -e
 
 debug "Moving files"
