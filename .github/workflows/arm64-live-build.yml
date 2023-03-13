@@ -28,7 +28,8 @@ jobs:
             --volume "${PWD}/artifacts:/artifacts"
                  
           shell: /bin/sh
-          install:
+          
+          install: |
             apt-get update -q -y
             apt-get install -q -y git live-build simple-cdd cdebootstrap curl
      
