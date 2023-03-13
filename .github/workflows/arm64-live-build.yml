@@ -14,13 +14,12 @@ jobs:
         include:
           - arch: aarch64
             distro: ubuntu18.04
-          - arch: ppc64le
-            distro: alpine_latest
-          - arch: s390x
-            distro: fedora_latest
-          - arch: none
-            distro: none
-            base_image: riscv64/busybox
+          - arch: aarch64
+            distro: bullseye
+          - arch: aarch64
+            distro: buster
+          - arch: aarch64
+            distro: stretch
     steps:
       - uses: actions/checkout@v3
       - uses: uraimo/run-on-arch-action@v2
@@ -40,6 +39,7 @@ jobs:
           # Mount the artifacts directory as /artifacts in the container
           dockerRunArgs: |
             --volume "${PWD}/artifacts:/artifacts"
+            --volume "${PWD}/live_build_config:/live_build_config"
 
           # Pass some environment variables to the container
           env: | # YAML, but pipe character is necessary
@@ -58,7 +58,7 @@ jobs:
             case "${{ matrix.distro }}" in
               ubuntu*|jessie|stretch|buster|bullseye)
                 apt-get update -q -y
-                apt-get install -q -y git
+                apt-get install -q -y git live-build simple-cdd cdebootstrap curl
                 ;;
               fedora*)
                 dnf -y update
@@ -72,10 +72,12 @@ jobs:
 
           # Produce a binary artifact and place it in the mounted volume
           run: |
+            cd /live_build_config
+            ./build.sh --live --verbose
             cp $(which git) "/artifacts/${artifact_name}"
             echo "Produced artifact at /artifacts/${artifact_name}"
 
-      - name: Show the artifact
+      - name: Build the artifact
         # Items placed in /artifacts in the container will be in
         # ${PWD}/artifacts on the host.
         run: |
