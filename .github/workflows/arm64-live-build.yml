@@ -1,4 +1,4 @@
-name: Live build action
+name: Live build action for aarch64
 run-name: ${{ github.actor }} is testing out GitHub Actions 🚀
 on: [push, pull_request]
 
